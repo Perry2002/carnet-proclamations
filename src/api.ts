@@ -7,7 +7,6 @@ export interface SessionSummary {
   type: SessionType;
   slug: string;
   status: SessionStatus;
-  dayCount: number | null;
   createdAt: string;
   closedAt: string | null;
   total: number;
@@ -18,14 +17,22 @@ export interface EntryItem {
   _id: string;
   name: string;
   count: number;
-  day: number | null;
   submittedAt: string;
 }
 
-export interface DailyTotal {
-  day: number;
+export interface Croisade {
+  _id: string;
+  title: string;
+  dayCount: number;
+  createdAt: string;
   total: number;
   entryCount: number;
+  openCount: number;
+  closedCount: number;
+}
+
+export interface CroisadeDay extends SessionSummary {
+  day: number;
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -52,19 +59,12 @@ export const api = {
   logout: () => request<{ ok: true }>('/logout', { method: 'POST' }),
   me: () => request<{ ok: true }>('/me'),
 
+  // Cultes
   listSessions: () => request<SessionSummary[]>('/sessions'),
-  createSession: (title: string, type: SessionType, dayCount?: number) =>
-    request<SessionSummary>('/sessions', {
-      method: 'POST',
-      body: JSON.stringify({ title, type, dayCount }),
-    }),
+  createSession: (title: string) =>
+    request<SessionSummary>('/sessions', { method: 'POST', body: JSON.stringify({ title }) }),
   getSession: (id: string) =>
-    request<{
-      session: SessionSummary;
-      entries: EntryItem[];
-      total: number;
-      dailyTotals: DailyTotal[] | null;
-    }>(`/sessions/${id}`),
+    request<{ session: SessionSummary; entries: EntryItem[]; total: number }>(`/sessions/${id}`),
   closeSession: (id: string) =>
     request<SessionSummary>(`/sessions/${id}/close`, { method: 'PATCH' }),
   reopenSession: (id: string) =>
@@ -73,13 +73,27 @@ export const api = {
     request<{ ok: true }>(`/sessions/${sessionId}/entries/${entryId}`, { method: 'DELETE' }),
   reportUrl: (id: string) => `/api/sessions/${id}/report`,
 
-  getPublicSession: (slug: string) =>
-    request<{ title: string; type: SessionType; status: SessionStatus; dayCount: number | null }>(
-      `/public/${slug}`
+  // Semaines de croisade
+  listCroisades: () => request<Croisade[]>('/croisades'),
+  createCroisade: (title: string, dayCount: number) =>
+    request<{ croisade: Croisade; sessions: CroisadeDay[] }>('/croisades', {
+      method: 'POST',
+      body: JSON.stringify({ title, dayCount }),
+    }),
+  getCroisadeDetail: (id: string) =>
+    request<{ croisade: Croisade; days: (CroisadeDay & { total: number; entryCount: number })[]; grandTotal: number }>(
+      `/croisades/${id}`
     ),
-  submitEntry: (slug: string, name: string, count: number, day?: number) =>
+  closeAllCroisadeDays: (id: string) =>
+    request<{ ok: true }>(`/croisades/${id}/close-all`, { method: 'PATCH' }),
+  croisadeReportUrl: (id: string) => `/api/croisades/${id}/report`,
+
+  // Formulaire public
+  getPublicSession: (slug: string) =>
+    request<{ title: string; status: SessionStatus }>(`/public/${slug}`),
+  submitEntry: (slug: string, name: string, count: number) =>
     request<{ ok: true }>(`/public/${slug}/entries`, {
       method: 'POST',
-      body: JSON.stringify({ name, count, day }),
+      body: JSON.stringify({ name, count }),
     }),
 };

@@ -8,8 +8,9 @@ import { nanoid } from 'nanoid';
 import { connectDB } from './db.js';
 import Session from './models/Session.js';
 import Entry from './models/Entry.js';
+import Croisade from './models/Croisade.js';
 import { signAdminToken, requireAuth } from './auth.js';
-import { streamSessionReport } from './pdf.js';
+import { streamSessionReport, streamCroisadeReport } from './pdf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,24 +33,17 @@ async function withDB(req, res, next) {
   }
 }
 app.use('/api/sessions', withDB);
+app.use('/api/croisades', withDB);
 app.use('/api/public', withDB);
 
 const isProd = process.env.NODE_ENV === 'production';
 
-function computeDailyTotals(session, entries) {
-  if (session.type !== 'croisade' || !session.dayCount) return null;
-  const totals = Array.from({ length: session.dayCount }, (_, i) => ({
-    day: i + 1,
-    total: 0,
-    entryCount: 0,
-  }));
-  for (const e of entries) {
-    if (e.day && e.day >= 1 && e.day <= session.dayCount) {
-      totals[e.day - 1].total += e.count;
-      totals[e.day - 1].entryCount += 1;
-    }
-  }
-  return totals;
+async function totalsForSessionIds(sessionIds) {
+  const totals = await Entry.aggregate([
+    { $match: { sessionId: { $in: sessionIds } } },
+    { $group: { _id: '$sessionId', total: { $sum: '$count' }, entryCount: { $sum: 1 } } },
+  ]);
+  return Object.fromEntries(totals.map((t) => [String(t._id), t]));
 }
 
 // ---------- Authentification responsable ----------
@@ -76,35 +70,24 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/me', requireAuth, (req, res) => res.json({ ok: true }));
 
-// ---------- Espace responsable : événements ----------
+// ---------- Espace responsable : cultes (événements simples, un seul lien) ----------
 
 app.post('/api/sessions', requireAuth, async (req, res) => {
-  const { title, type, dayCount } = req.body || {};
+  const { title } = req.body || {};
   if (!title || !title.trim()) {
     return res.status(400).json({ error: 'Le titre est requis' });
   }
-  const isCroisade = type === 'croisade';
-  let resolvedDayCount = null;
-  if (isCroisade) {
-    const parsed = parseInt(dayCount, 10);
-    resolvedDayCount = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 31) : 7;
-  }
   const session = await Session.create({
     title: title.trim(),
-    type: isCroisade ? 'croisade' : 'culte',
-    dayCount: resolvedDayCount,
+    type: 'culte',
     slug: nanoid(8),
   });
   res.json(session);
 });
 
 app.get('/api/sessions', requireAuth, async (req, res) => {
-  const sessions = await Session.find().sort({ createdAt: -1 }).lean();
-  const totals = await Entry.aggregate([
-    { $group: { _id: '$sessionId', total: { $sum: '$count' }, entryCount: { $sum: 1 } } },
-  ]);
-  const totalsMap = Object.fromEntries(totals.map((t) => [String(t._id), t]));
-
+  const sessions = await Session.find({ type: 'culte' }).sort({ createdAt: -1 }).lean();
+  const totalsMap = await totalsForSessionIds(sessions.map((s) => s._id));
   res.json(
     sessions.map((s) => ({
       ...s,
@@ -119,8 +102,7 @@ app.get('/api/sessions/:id', requireAuth, async (req, res) => {
   if (!session) return res.status(404).json({ error: 'Événement introuvable' });
   const entries = await Entry.find({ sessionId: session._id }).sort({ submittedAt: 1 }).lean();
   const total = entries.reduce((sum, e) => sum + e.count, 0);
-  const dailyTotals = computeDailyTotals(session, entries);
-  res.json({ session, entries, total, dailyTotals });
+  res.json({ session, entries, total });
 });
 
 app.patch('/api/sessions/:id/close', requireAuth, async (req, res) => {
@@ -153,21 +135,128 @@ app.get('/api/sessions/:id/report', requireAuth, async (req, res) => {
   if (!session) return res.status(404).json({ error: 'Événement introuvable' });
   const entries = await Entry.find({ sessionId: session._id }).sort({ submittedAt: 1 }).lean();
   const total = entries.reduce((sum, e) => sum + e.count, 0);
-  const dailyTotals = computeDailyTotals(session, entries);
-  streamSessionReport(res, { session, entries, total, dailyTotals });
+  streamSessionReport(res, { session, entries, total });
 });
 
-// ---------- Formulaire public (lien partagé) ----------
+// ---------- Espace responsable : semaines de croisade (un lien par jour) ----------
+
+app.post('/api/croisades', requireAuth, async (req, res) => {
+  const { title, dayCount } = req.body || {};
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: 'Le titre est requis' });
+  }
+  const parsed = parseInt(dayCount, 10);
+  const resolvedDayCount = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 31) : 7;
+
+  const croisade = await Croisade.create({ title: title.trim(), dayCount: resolvedDayCount });
+
+  const daySessions = await Session.insertMany(
+    Array.from({ length: resolvedDayCount }, (_, i) => ({
+      title: `${title.trim()} — Jour ${i + 1}`,
+      type: 'croisade',
+      croisadeId: croisade._id,
+      day: i + 1,
+      slug: nanoid(8),
+    }))
+  );
+
+  res.json({ croisade, sessions: daySessions });
+});
+
+app.get('/api/croisades', requireAuth, async (req, res) => {
+  const croisades = await Croisade.find().sort({ createdAt: -1 }).lean();
+  const allDaySessions = await Session.find({
+    croisadeId: { $in: croisades.map((c) => c._id) },
+  }).lean();
+  const totalsMap = await totalsForSessionIds(allDaySessions.map((s) => s._id));
+
+  const byCroisade = {};
+  for (const s of allDaySessions) {
+    const key = String(s.croisadeId);
+    if (!byCroisade[key]) byCroisade[key] = [];
+    byCroisade[key].push(s);
+  }
+
+  res.json(
+    croisades.map((c) => {
+      const days = byCroisade[String(c._id)] || [];
+      const total = days.reduce((sum, d) => sum + (totalsMap[String(d._id)]?.total || 0), 0);
+      const entryCount = days.reduce((sum, d) => sum + (totalsMap[String(d._id)]?.entryCount || 0), 0);
+      const openCount = days.filter((d) => d.status === 'open').length;
+      return {
+        ...c,
+        total,
+        entryCount,
+        openCount,
+        closedCount: days.length - openCount,
+      };
+    })
+  );
+});
+
+app.get('/api/croisades/:id', requireAuth, async (req, res) => {
+  const croisade = await Croisade.findById(req.params.id).lean();
+  if (!croisade) return res.status(404).json({ error: 'Semaine introuvable' });
+
+  const days = await Session.find({ croisadeId: croisade._id }).sort({ day: 1 }).lean();
+  const totalsMap = await totalsForSessionIds(days.map((d) => d._id));
+
+  const dayList = days.map((d) => ({
+    ...d,
+    total: totalsMap[String(d._id)]?.total || 0,
+    entryCount: totalsMap[String(d._id)]?.entryCount || 0,
+  }));
+  const grandTotal = dayList.reduce((sum, d) => sum + d.total, 0);
+
+  res.json({ croisade, days: dayList, grandTotal });
+});
+
+app.patch('/api/croisades/:id/close-all', requireAuth, async (req, res) => {
+  const croisade = await Croisade.findById(req.params.id).lean();
+  if (!croisade) return res.status(404).json({ error: 'Semaine introuvable' });
+  await Session.updateMany(
+    { croisadeId: croisade._id, status: 'open' },
+    { status: 'closed', closedAt: new Date() }
+  );
+  res.json({ ok: true });
+});
+
+app.get('/api/croisades/:id/report', requireAuth, async (req, res) => {
+  const croisade = await Croisade.findById(req.params.id).lean();
+  if (!croisade) return res.status(404).json({ error: 'Semaine introuvable' });
+
+  const daySessions = await Session.find({ croisadeId: croisade._id }).sort({ day: 1 }).lean();
+  const allEntries = await Entry.find({
+    sessionId: { $in: daySessions.map((d) => d._id) },
+  }).sort({ submittedAt: 1 }).lean();
+
+  const entriesBySession = {};
+  for (const e of allEntries) {
+    const key = String(e.sessionId);
+    if (!entriesBySession[key]) entriesBySession[key] = [];
+    entriesBySession[key].push(e);
+  }
+
+  const days = daySessions.map((d) => {
+    const dayEntries = entriesBySession[String(d._id)] || [];
+    return {
+      day: d.day,
+      title: d.title,
+      entries: dayEntries,
+      total: dayEntries.reduce((sum, e) => sum + e.count, 0),
+    };
+  });
+  const grandTotal = days.reduce((sum, d) => sum + d.total, 0);
+
+  streamCroisadeReport(res, { croisade, days, grandTotal });
+});
+
+// ---------- Formulaire public (lien partagé, pour un culte ou un jour de croisade) ----------
 
 app.get('/api/public/:slug', async (req, res) => {
   const session = await Session.findOne({ slug: req.params.slug }).lean();
   if (!session) return res.status(404).json({ error: 'Lien invalide' });
-  res.json({
-    title: session.title,
-    type: session.type,
-    status: session.status,
-    dayCount: session.dayCount,
-  });
+  res.json({ title: session.title, status: session.status });
 });
 
 app.post('/api/public/:slug/entries', async (req, res) => {
@@ -176,27 +265,12 @@ app.post('/api/public/:slug/entries', async (req, res) => {
   if (session.status === 'closed') {
     return res.status(403).json({ error: 'Cet événement est clôturé, les envois ne sont plus acceptés.' });
   }
-  const { name, count, day } = req.body || {};
+  const { name, count } = req.body || {};
   const parsedCount = Number(count);
   if (!name || !name.trim() || !Number.isFinite(parsedCount) || parsedCount < 0) {
     return res.status(400).json({ error: 'Merci de renseigner un nom et un nombre valide.' });
   }
-
-  let resolvedDay = null;
-  if (session.type === 'croisade') {
-    const parsedDay = parseInt(day, 10);
-    if (!Number.isFinite(parsedDay) || parsedDay < 1 || parsedDay > session.dayCount) {
-      return res.status(400).json({ error: 'Merci d\'indiquer un jour de croisade valide.' });
-    }
-    resolvedDay = parsedDay;
-  }
-
-  await Entry.create({
-    sessionId: session._id,
-    name: name.trim(),
-    count: Math.round(parsedCount),
-    day: resolvedDay,
-  });
+  await Entry.create({ sessionId: session._id, name: name.trim(), count: Math.round(parsedCount) });
   res.json({ ok: true });
 });
 

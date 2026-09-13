@@ -8,7 +8,6 @@ const EntrySchema = new mongoose.Schema({
     index: true,
   },
   name: { type: String, required: true, trim: true },
-  day: { type: Number, default: null }, // numéro du jour de la croisade (1, 2, 3...), null pour un culte
   count: { type: Number, required: true, min: 0 },
   submittedAt: { type: Date, default: Date.now },
 });

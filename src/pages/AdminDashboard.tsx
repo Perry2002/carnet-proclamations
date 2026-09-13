@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, DailyTotal, EntryItem, SessionSummary, SessionType } from '../api';
+import { api, Croisade, CroisadeDay, EntryItem, SessionSummary } from '../api';
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('fr-FR', {
@@ -10,27 +10,43 @@ function formatDate(iso: string) {
   });
 }
 
+type CroisadeDetail = {
+  days: (CroisadeDay & { total: number; entryCount: number })[];
+  grandTotal: number;
+};
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
+
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [croisades, setCroisades] = useState<Croisade[] | null>(null);
   const [authError, setAuthError] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [entriesById, setEntriesById] = useState<Record<string, EntryItem[]>>({});
-  const [dailyTotalsById, setDailyTotalsById] = useState<Record<string, DailyTotal[] | null>>({});
+
+  const [showCreateCulte, setShowCreateCulte] = useState(false);
+  const [showCreateCroisade, setShowCreateCroisade] = useState(false);
+
+  const [expandedCulteId, setExpandedCulteId] = useState<string | null>(null);
+  const [culteEntriesById, setCulteEntriesById] = useState<Record<string, EntryItem[]>>({});
+
+  const [expandedCroisadeId, setExpandedCroisadeId] = useState<string | null>(null);
+  const [croisadeDetailById, setCroisadeDetailById] = useState<Record<string, CroisadeDetail>>({});
+  const [expandedDayId, setExpandedDayId] = useState<string | null>(null);
+  const [dayEntriesById, setDayEntriesById] = useState<Record<string, EntryItem[]>>({});
+
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
 
-  async function loadSessions() {
+  async function loadAll() {
     try {
-      const data = await api.listSessions();
-      setSessions(data);
+      const [s, c] = await Promise.all([api.listSessions(), api.listCroisades()]);
+      setSessions(s);
+      setCroisades(c);
     } catch {
       setAuthError(true);
     }
   }
 
   useEffect(() => {
-    loadSessions();
+    loadAll();
   }, []);
 
   useEffect(() => {
@@ -42,45 +58,103 @@ export default function AdminDashboard() {
     navigate('/login');
   }
 
-  async function toggleExpand(session: SessionSummary) {
-    if (expandedId === session._id) {
-      setExpandedId(null);
-      return;
-    }
-    setExpandedId(session._id);
-    if (!entriesById[session._id]) {
-      const data = await api.getSession(session._id);
-      setEntriesById((prev) => ({ ...prev, [session._id]: data.entries }));
-      setDailyTotalsById((prev) => ({ ...prev, [session._id]: data.dailyTotals }));
-    }
-  }
-
-  async function onClose(session: SessionSummary) {
-    if (!confirm(`Clôturer « ${session.title} » ? Le lien n'acceptera plus de nouveaux envois.`)) return;
-    await api.closeSession(session._id);
-    loadSessions();
-  }
-
-  async function onReopen(session: SessionSummary) {
-    await api.reopenSession(session._id);
-    loadSessions();
-  }
-
-  async function onDeleteEntry(sessionId: string, entryId: string) {
-    if (!confirm('Supprimer cette entrée ?')) return;
-    await api.deleteEntry(sessionId, entryId);
-    const data = await api.getSession(sessionId);
-    setEntriesById((prev) => ({ ...prev, [sessionId]: data.entries }));
-    setDailyTotalsById((prev) => ({ ...prev, [sessionId]: data.dailyTotals }));
-    loadSessions();
-  }
-
   function copyLink(slug: string) {
     const url = `${window.location.origin}/c/${slug}`;
     navigator.clipboard?.writeText(url).then(() => {
       setCopiedSlug(slug);
       setTimeout(() => setCopiedSlug(null), 1800);
     });
+  }
+
+  // ---------- Cultes ----------
+
+  async function toggleCulteExpand(session: SessionSummary) {
+    if (expandedCulteId === session._id) {
+      setExpandedCulteId(null);
+      return;
+    }
+    setExpandedCulteId(session._id);
+    if (!culteEntriesById[session._id]) {
+      const data = await api.getSession(session._id);
+      setCulteEntriesById((prev) => ({ ...prev, [session._id]: data.entries }));
+    }
+  }
+
+  async function onCloseCulte(session: SessionSummary) {
+    if (!confirm(`Clôturer « ${session.title} » ? Le lien n'acceptera plus de nouveaux envois.`)) return;
+    await api.closeSession(session._id);
+    loadAll();
+  }
+
+  async function onReopenCulte(session: SessionSummary) {
+    await api.reopenSession(session._id);
+    loadAll();
+  }
+
+  async function onDeleteCulteEntry(sessionId: string, entryId: string) {
+    if (!confirm('Supprimer cette entrée ?')) return;
+    await api.deleteEntry(sessionId, entryId);
+    const data = await api.getSession(sessionId);
+    setCulteEntriesById((prev) => ({ ...prev, [sessionId]: data.entries }));
+    loadAll();
+  }
+
+  // ---------- Semaines de croisade ----------
+
+  async function loadCroisadeDetail(id: string) {
+    const data = await api.getCroisadeDetail(id);
+    setCroisadeDetailById((prev) => ({ ...prev, [id]: { days: data.days, grandTotal: data.grandTotal } }));
+  }
+
+  async function toggleCroisadeExpand(croisade: Croisade) {
+    if (expandedCroisadeId === croisade._id) {
+      setExpandedCroisadeId(null);
+      return;
+    }
+    setExpandedCroisadeId(croisade._id);
+    if (!croisadeDetailById[croisade._id]) {
+      await loadCroisadeDetail(croisade._id);
+    }
+  }
+
+  async function onCloseDay(croisadeId: string, daySessionId: string) {
+    await api.closeSession(daySessionId);
+    await loadCroisadeDetail(croisadeId);
+    loadAll();
+  }
+
+  async function onReopenDay(croisadeId: string, daySessionId: string) {
+    await api.reopenSession(daySessionId);
+    await loadCroisadeDetail(croisadeId);
+    loadAll();
+  }
+
+  async function onCloseAllDays(croisade: Croisade) {
+    if (!confirm(`Clôturer tous les jours de « ${croisade.title} » ? Plus aucun lien de cette semaine n'acceptera de nouveaux envois.`)) return;
+    await api.closeAllCroisadeDays(croisade._id);
+    await loadCroisadeDetail(croisade._id);
+    loadAll();
+  }
+
+  async function toggleDayEntries(daySessionId: string) {
+    if (expandedDayId === daySessionId) {
+      setExpandedDayId(null);
+      return;
+    }
+    setExpandedDayId(daySessionId);
+    if (!dayEntriesById[daySessionId]) {
+      const data = await api.getSession(daySessionId);
+      setDayEntriesById((prev) => ({ ...prev, [daySessionId]: data.entries }));
+    }
+  }
+
+  async function onDeleteCroisadeEntry(croisadeId: string, daySessionId: string, entryId: string) {
+    if (!confirm('Supprimer cette entrée ?')) return;
+    await api.deleteEntry(daySessionId, entryId);
+    const data = await api.getSession(daySessionId);
+    setDayEntriesById((prev) => ({ ...prev, [daySessionId]: data.entries }));
+    await loadCroisadeDetail(croisadeId);
+    loadAll();
   }
 
   return (
@@ -95,52 +169,36 @@ export default function AdminDashboard() {
           </button>
         </div>
 
+        {/* ---------- Cultes ---------- */}
         <div className="card" style={{ marginBottom: 20 }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: 10,
-            }}
-          >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <div>
-              <h1 className="small" style={{ marginBottom: 2 }}>
-                Événements
-              </h1>
-              <p className="subtitle" style={{ margin: 0 }}>
-                Un lien par culte ou par semaine de croisade.
-              </p>
+              <h1 className="small" style={{ marginBottom: 2 }}>Cultes</h1>
+              <p className="subtitle" style={{ margin: 0 }}>Un lien par culte.</p>
             </div>
-            <button className="btn-secondary" onClick={() => setShowCreate(true)}>
-              Nouvel événement
+            <button className="btn-secondary" onClick={() => setShowCreateCulte(true)}>
+              Nouveau culte
             </button>
           </div>
         </div>
 
         {sessions === null && !authError && <div className="loading">Chargement...</div>}
-
         {sessions && sessions.length === 0 && (
-          <div className="empty">Aucun événement pour l'instant. Crée le premier avec le bouton ci-dessus.</div>
+          <div className="empty">Aucun culte pour l'instant.</div>
         )}
-
         {sessions && sessions.length > 0 && (
-          <ul className="session-list">
+          <ul className="session-list" style={{ marginBottom: 28 }}>
             {sessions.map((s) => (
               <li key={s._id} className="session-item">
                 <div className="session-top">
                   <div>
                     <div className="session-title">{s.title}</div>
                     <div className="session-meta">
-                      {s.type === 'croisade' ? `Semaine de croisade · ${s.dayCount} jours` : 'Culte'} · créé
-                      le {formatDate(s.createdAt)} · {s.entryCount} entrée{s.entryCount > 1 ? 's' : ''}
+                      créé le {formatDate(s.createdAt)} · {s.entryCount} entrée{s.entryCount > 1 ? 's' : ''}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <span className={`badge ${s.status}`}>
-                      {s.status === 'open' ? 'Ouvert' : 'Clôturé'}
-                    </span>
+                    <span className={`badge ${s.status}`}>{s.status === 'open' ? 'Ouvert' : 'Clôturé'}</span>
                     <div className="session-total">{s.total}</div>
                   </div>
                 </div>
@@ -153,89 +211,32 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="session-actions">
-                  <button className="btn-secondary" onClick={() => toggleExpand(s)}>
-                    {expandedId === s._id ? 'Masquer le détail' : 'Voir le détail'}
+                  <button className="btn-secondary" onClick={() => toggleCulteExpand(s)}>
+                    {expandedCulteId === s._id ? 'Masquer le détail' : 'Voir le détail'}
                   </button>
                   {s.status === 'open' ? (
-                    <button className="btn-secondary" onClick={() => onClose(s)}>
-                      Clôturer
-                    </button>
+                    <button className="btn-secondary" onClick={() => onCloseCulte(s)}>Clôturer</button>
                   ) : (
-                    <button className="btn-secondary" onClick={() => onReopen(s)}>
-                      Rouvrir
-                    </button>
+                    <button className="btn-secondary" onClick={() => onReopenCulte(s)}>Rouvrir</button>
                   )}
                   <a className="btn-secondary" href={api.reportUrl(s._id)} style={{ textDecoration: 'none', display: 'inline-block' }}>
                     Télécharger le PDF
                   </a>
                 </div>
 
-                {expandedId === s._id && s.type === 'croisade' && (
-                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
-                    {(dailyTotalsById[s._id] || []).map((d) => {
-                      const dayEntries = (entriesById[s._id] || []).filter((e) => e.day === d.day);
-                      return (
-                        <div key={d.day} style={{ marginBottom: 14 }}>
-                          <div
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              fontWeight: 600,
-                              fontSize: 14,
-                              marginBottom: 4,
-                            }}
-                          >
-                            <span>Jour {d.day}</span>
-                            <span style={{ color: 'var(--gold-dark)' }}>{d.total}</span>
-                          </div>
-                          {dayEntries.length === 0 ? (
-                            <div style={{ color: 'var(--ink-soft)', fontSize: 13.5 }}>
-                              Aucune entrée pour ce jour.
-                            </div>
-                          ) : (
-                            <ul className="entry-list" style={{ borderTop: 'none' }}>
-                              {dayEntries.map((e) => (
-                                <li key={e._id} className="entry-row">
-                                  <span>{e.name}</span>
-                                  <span className="entry-right">
-                                    <span className="entry-count">{e.count}</span>
-                                    <button
-                                      className="entry-del"
-                                      aria-label="Supprimer"
-                                      onClick={() => onDeleteEntry(s._id, e._id)}
-                                    >
-                                      ✕
-                                    </button>
-                                  </span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {expandedId === s._id && s.type === 'culte' && (
+                {expandedCulteId === s._id && (
                   <ul className="entry-list">
-                    {(entriesById[s._id] || []).length === 0 && (
+                    {(culteEntriesById[s._id] || []).length === 0 && (
                       <li style={{ padding: '10px 2px', color: 'var(--ink-soft)', fontSize: 14 }}>
                         Aucune entrée pour cet événement.
                       </li>
                     )}
-                    {(entriesById[s._id] || []).map((e) => (
+                    {(culteEntriesById[s._id] || []).map((e) => (
                       <li key={e._id} className="entry-row">
                         <span>{e.name}</span>
                         <span className="entry-right">
                           <span className="entry-count">{e.count}</span>
-                          <button
-                            className="entry-del"
-                            aria-label="Supprimer"
-                            onClick={() => onDeleteEntry(s._id, e._id)}
-                          >
-                            ✕
-                          </button>
+                          <button className="entry-del" aria-label="Supprimer" onClick={() => onDeleteCulteEntry(s._id, e._id)}>✕</button>
                         </span>
                       </li>
                     ))}
@@ -245,14 +246,141 @@ export default function AdminDashboard() {
             ))}
           </ul>
         )}
+
+        {/* ---------- Semaines de croisade ---------- */}
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <div>
+              <h1 className="small" style={{ marginBottom: 2 }}>Semaines de croisade</h1>
+              <p className="subtitle" style={{ margin: 0 }}>
+                Un lien généré automatiquement pour chaque jour — personne n'a besoin de choisir le jour.
+              </p>
+            </div>
+            <button className="btn-secondary" onClick={() => setShowCreateCroisade(true)}>
+              Nouvelle semaine
+            </button>
+          </div>
+        </div>
+
+        {croisades && croisades.length === 0 && (
+          <div className="empty">Aucune semaine de croisade pour l'instant.</div>
+        )}
+        {croisades && croisades.length > 0 && (
+          <ul className="session-list">
+            {croisades.map((c) => {
+              const detail = croisadeDetailById[c._id];
+              return (
+                <li key={c._id} className="session-item">
+                  <div className="session-top">
+                    <div>
+                      <div className="session-title">{c.title}</div>
+                      <div className="session-meta">
+                        {c.dayCount} jours · créé le {formatDate(c.createdAt)} · {c.entryCount} entrée{c.entryCount > 1 ? 's' : ''}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <span className={`badge ${c.openCount > 0 ? 'open' : 'closed'}`}>
+                        {c.openCount > 0 ? `${c.openCount}/${c.dayCount} jours ouverts` : 'Tout clôturé'}
+                      </span>
+                      <div className="session-total">{c.total}</div>
+                    </div>
+                  </div>
+
+                  <div className="session-actions">
+                    <button className="btn-secondary" onClick={() => toggleCroisadeExpand(c)}>
+                      {expandedCroisadeId === c._id ? 'Masquer les jours' : 'Voir les jours'}
+                    </button>
+                    {c.openCount > 0 && (
+                      <button className="btn-secondary" onClick={() => onCloseAllDays(c)}>
+                        Clôturer tous les jours
+                      </button>
+                    )}
+                    <a
+                      className="btn-secondary"
+                      href={api.croisadeReportUrl(c._id)}
+                      style={{ textDecoration: 'none', display: 'inline-block' }}
+                    >
+                      Télécharger le rapport de la semaine
+                    </a>
+                  </div>
+
+                  {expandedCroisadeId === c._id && detail && (
+                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+                      {detail.days.map((d) => (
+                        <div key={d._id} style={{ marginBottom: 16 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                            <div style={{ fontWeight: 600, fontSize: 14.5 }}>
+                              Jour {d.day} <span style={{ color: 'var(--gold-dark)', fontWeight: 700 }}>· {d.total}</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <span className={`badge ${d.status}`}>{d.status === 'open' ? 'Ouvert' : 'Clôturé'}</span>
+                              <button className="link-quiet" onClick={() => toggleDayEntries(d._id)}>
+                                {expandedDayId === d._id ? 'Masquer les noms' : 'Voir les noms'}
+                              </button>
+                              {d.status === 'open' ? (
+                                <button className="link-quiet" onClick={() => onCloseDay(c._id, d._id)}>Clôturer</button>
+                              ) : (
+                                <button className="link-quiet" onClick={() => onReopenDay(c._id, d._id)}>Rouvrir</button>
+                              )}
+                            </div>
+                          </div>
+                          <div className="link-box">
+                            <span>{window.location.origin}/c/{d.slug}</span>
+                            <button className="link-quiet" onClick={() => copyLink(d.slug)}>
+                              {copiedSlug === d.slug ? 'Copié !' : 'Copier'}
+                            </button>
+                          </div>
+                          {expandedDayId === d._id && (
+                            <ul className="entry-list">
+                              {(dayEntriesById[d._id] || []).length === 0 && (
+                                <li style={{ padding: '10px 2px', color: 'var(--ink-soft)', fontSize: 14 }}>
+                                  Aucune entrée pour ce jour.
+                                </li>
+                              )}
+                              {(dayEntriesById[d._id] || []).map((e) => (
+                                <li key={e._id} className="entry-row">
+                                  <span>{e.name}</span>
+                                  <span className="entry-right">
+                                    <span className="entry-count">{e.count}</span>
+                                    <button
+                                      className="entry-del"
+                                      aria-label="Supprimer"
+                                      onClick={() => onDeleteCroisadeEntry(c._id, d._id, e._id)}
+                                    >
+                                      ✕
+                                    </button>
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
-      {showCreate && (
-        <CreateSessionModal
-          onClose={() => setShowCreate(false)}
+      {showCreateCulte && (
+        <CreateCulteModal
+          onClose={() => setShowCreateCulte(false)}
           onCreated={() => {
-            setShowCreate(false);
-            loadSessions();
+            setShowCreateCulte(false);
+            loadAll();
+          }}
+        />
+      )}
+
+      {showCreateCroisade && (
+        <CreateCroisadeModal
+          onClose={() => setShowCreateCroisade(false)}
+          onCreated={() => {
+            setShowCreateCroisade(false);
+            loadAll();
           }}
         />
       )}
@@ -260,15 +388,61 @@ export default function AdminDashboard() {
   );
 }
 
-function CreateSessionModal({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void;
-  onCreated: () => void;
-}) {
+function CreateCulteModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<SessionType>('culte');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim()) {
+      setError('Le titre est requis.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      await api.createSession(title.trim());
+      onCreated();
+    } catch (err: any) {
+      setError(err.message || 'La création a échoué.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal card" onClick={(e) => e.stopPropagation()}>
+        <h1 className="small">Nouveau culte</h1>
+        <p className="subtitle">Un lien unique sera généré pour ce culte.</p>
+        <form onSubmit={onSubmit}>
+          <div className="field">
+            <label htmlFor="title">Titre</label>
+            <input
+              type="text"
+              id="title"
+              placeholder="Ex : Culte du dimanche 20 septembre"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              autoFocus
+            />
+          </div>
+          {error && <div className="error">{error}</div>}
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button type="button" className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Annuler</button>
+            <button type="submit" className="btn-primary" disabled={loading} style={{ flex: 1 }}>
+              {loading ? 'Création...' : 'Créer le lien'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function CreateCroisadeModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [title, setTitle] = useState('');
   const [dayCount, setDayCount] = useState(7);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -282,7 +456,7 @@ function CreateSessionModal({
     setLoading(true);
     setError('');
     try {
-      await api.createSession(title.trim(), type, type === 'croisade' ? dayCount : undefined);
+      await api.createCroisade(title.trim(), dayCount);
       onCreated();
     } catch (err: any) {
       setError(err.message || 'La création a échoué.');
@@ -294,49 +468,40 @@ function CreateSessionModal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal card" onClick={(e) => e.stopPropagation()}>
-        <h1 className="small">Nouvel événement</h1>
-        <p className="subtitle">Un lien unique sera généré pour cet événement.</p>
+        <h1 className="small">Nouvelle semaine de croisade</h1>
+        <p className="subtitle">
+          Un lien sera généré automatiquement pour chaque jour — personne n'aura à choisir le jour.
+        </p>
         <form onSubmit={onSubmit}>
           <div className="field">
-            <label htmlFor="title">Titre</label>
+            <label htmlFor="ctitle">Titre</label>
             <input
               type="text"
-              id="title"
-              placeholder="Ex : Culte du dimanche 20 septembre"
+              id="ctitle"
+              placeholder="Ex : Croisade de prière et de jeûne de septembre"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               autoFocus
             />
           </div>
           <div className="field">
-            <label htmlFor="type">Type</label>
-            <select id="type" value={type} onChange={(e) => setType(e.target.value as SessionType)}>
-              <option value="culte">Culte</option>
-              <option value="croisade">Semaine de croisade</option>
-            </select>
+            <label htmlFor="dayCount">Nombre de jours</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              id="dayCount"
+              value={dayCount}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                setDayCount(Number.isNaN(v) ? 1 : Math.min(Math.max(v, 1), 31));
+              }}
+            />
           </div>
-          {type === 'croisade' && (
-            <div className="field">
-              <label htmlFor="dayCount">Nombre de jours</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                id="dayCount"
-                value={dayCount}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  setDayCount(Number.isNaN(v) ? 1 : Math.min(Math.max(v, 1), 31));
-                }}
-              />
-            </div>
-          )}
           {error && <div className="error">{error}</div>}
           <div style={{ display: 'flex', gap: 10 }}>
-            <button type="button" className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>
-              Annuler
-            </button>
+            <button type="button" className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Annuler</button>
             <button type="submit" className="btn-primary" disabled={loading} style={{ flex: 1 }}>
-              {loading ? 'Création...' : 'Créer le lien'}
+              {loading ? 'Création...' : 'Créer les liens'}
             </button>
           </div>
         </form>

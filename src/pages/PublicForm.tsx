@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { api, SessionStatus, SessionType } from '../api';
+import { api, SessionStatus } from '../api';
 
 type LoadState = 'loading' | 'ready' | 'not-found';
 
@@ -8,13 +8,10 @@ export default function PublicForm() {
   const { slug = '' } = useParams();
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<SessionType>('culte');
   const [status, setStatus] = useState<SessionStatus>('open');
-  const [dayCount, setDayCount] = useState<number | null>(null);
 
   const [name, setName] = useState('');
   const [count, setCount] = useState(0);
-  const [day, setDay] = useState<number>(1);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -24,9 +21,7 @@ export default function PublicForm() {
       .getPublicSession(slug)
       .then((s) => {
         setTitle(s.title);
-        setType(s.type);
         setStatus(s.status);
-        setDayCount(s.dayCount);
         setLoadState('ready');
       })
       .catch(() => setLoadState('not-found'));
@@ -41,7 +36,7 @@ export default function PublicForm() {
     setError('');
     setSubmitting(true);
     try {
-      await api.submitEntry(slug, name.trim(), count, type === 'croisade' ? day : undefined);
+      await api.submitEntry(slug, name.trim(), count);
       setSubmitted(true);
     } catch (err: any) {
       setError(err.message || "L'envoi a échoué, réessaie dans un instant.");
@@ -49,8 +44,6 @@ export default function PublicForm() {
       setSubmitting(false);
     }
   }
-
-  const typeLabel = type === 'croisade' ? 'Semaine de croisade' : 'Culte';
 
   return (
     <div className="page">
@@ -72,32 +65,15 @@ export default function PublicForm() {
           {loadState === 'ready' && status === 'closed' && (
             <div className="confirm">
               <h2>Événement clôturé</h2>
-              <p>
-                « {title} » ({typeLabel}) est clôturé. Les envois ne sont plus acceptés pour cet
-                événement.
-              </p>
+              <p>« {title} » est clôturé. Les envois ne sont plus acceptés pour cet événement.</p>
             </div>
           )}
 
           {loadState === 'ready' && status === 'open' && !submitted && (
             <>
               <h1>{title}</h1>
-              <p className="subtitle">
-                {typeLabel} — indique ton nom et le nombre de proclamations faites.
-              </p>
+              <p className="subtitle">Indique ton nom et le nombre de proclamations faites.</p>
               <form onSubmit={onSubmit}>
-                {type === 'croisade' && dayCount && (
-                  <div className="field">
-                    <label htmlFor="day">Jour de la croisade</label>
-                    <select id="day" value={day} onChange={(e) => setDay(Number(e.target.value))}>
-                      {Array.from({ length: dayCount }, (_, i) => i + 1).map((d) => (
-                        <option key={d} value={d}>
-                          Jour {d}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
                 <div className="field">
                   <label htmlFor="name">Nom complet</label>
                   <input
