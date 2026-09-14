@@ -46,6 +46,12 @@ async function totalsForSessionIds(sessionIds) {
   return Object.fromEntries(totals.map((t) => [String(t._id), t]));
 }
 
+function paginationParams(req) {
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
+  return { page, limit };
+}
+
 // ---------- Authentification responsable ----------
 
 app.post('/api/login', (req, res) => {
@@ -86,15 +92,25 @@ app.post('/api/sessions', requireAuth, async (req, res) => {
 });
 
 app.get('/api/sessions', requireAuth, async (req, res) => {
-  const sessions = await Session.find({ type: 'culte' }).sort({ createdAt: -1 }).lean();
+  const { page, limit } = paginationParams(req);
+  const filter = { type: 'culte' };
+  const total = await Session.countDocuments(filter);
+  const sessions = await Session.find(filter)
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .lean();
   const totalsMap = await totalsForSessionIds(sessions.map((s) => s._id));
-  res.json(
-    sessions.map((s) => ({
+  res.json({
+    items: sessions.map((s) => ({
       ...s,
       total: totalsMap[String(s._id)]?.total || 0,
       entryCount: totalsMap[String(s._id)]?.entryCount || 0,
-    }))
-  );
+    })),
+    page,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
+    total,
+  });
 });
 
 app.get('/api/sessions/:id', requireAuth, async (req, res) => {
@@ -164,7 +180,14 @@ app.post('/api/croisades', requireAuth, async (req, res) => {
 });
 
 app.get('/api/croisades', requireAuth, async (req, res) => {
-  const croisades = await Croisade.find().sort({ createdAt: -1 }).lean();
+  const { page, limit } = paginationParams(req);
+  const total = await Croisade.countDocuments();
+  const croisades = await Croisade.find()
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .lean();
+
   const allDaySessions = await Session.find({
     croisadeId: { $in: croisades.map((c) => c._id) },
   }).lean();
@@ -177,21 +200,24 @@ app.get('/api/croisades', requireAuth, async (req, res) => {
     byCroisade[key].push(s);
   }
 
-  res.json(
-    croisades.map((c) => {
+  res.json({
+    items: croisades.map((c) => {
       const days = byCroisade[String(c._id)] || [];
-      const total = days.reduce((sum, d) => sum + (totalsMap[String(d._id)]?.total || 0), 0);
+      const dayTotal = days.reduce((sum, d) => sum + (totalsMap[String(d._id)]?.total || 0), 0);
       const entryCount = days.reduce((sum, d) => sum + (totalsMap[String(d._id)]?.entryCount || 0), 0);
       const openCount = days.filter((d) => d.status === 'open').length;
       return {
         ...c,
-        total,
+        total: dayTotal,
         entryCount,
         openCount,
         closedCount: days.length - openCount,
       };
-    })
-  );
+    }),
+    page,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
+    total,
+  });
 });
 
 app.get('/api/croisades/:id', requireAuth, async (req, res) => {

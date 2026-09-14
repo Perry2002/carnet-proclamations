@@ -35,6 +35,13 @@ export interface CroisadeDay extends SessionSummary {
   day: number;
 }
 
+export interface Paginated<T> {
+  items: T[];
+  page: number;
+  totalPages: number;
+  total: number;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch('/api' + path, {
     credentials: 'include',
@@ -60,7 +67,8 @@ export const api = {
   me: () => request<{ ok: true }>('/me'),
 
   // Cultes
-  listSessions: () => request<SessionSummary[]>('/sessions'),
+  listSessions: (page = 1, limit = 10) =>
+    request<Paginated<SessionSummary>>(`/sessions?page=${page}&limit=${limit}`),
   createSession: (title: string) =>
     request<SessionSummary>('/sessions', { method: 'POST', body: JSON.stringify({ title }) }),
   getSession: (id: string) =>
@@ -74,7 +82,8 @@ export const api = {
   reportUrl: (id: string) => `/api/sessions/${id}/report`,
 
   // Semaines de croisade
-  listCroisades: () => request<Croisade[]>('/croisades'),
+  listCroisades: (page = 1, limit = 10) =>
+    request<Paginated<Croisade>>(`/croisades?page=${page}&limit=${limit}`),
   createCroisade: (title: string, dayCount: number) =>
     request<{ croisade: Croisade; sessions: CroisadeDay[] }>('/croisades', {
       method: 'POST',
